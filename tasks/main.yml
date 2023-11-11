@@ -1,0 +1,138 @@
+---
+# tasks file for ansible-role-paperless-ngx-podman
+
+- name: "Include secrets"
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/inventory/{{ secrets_file }}"
+    name: "bws"
+  when: use_bws
+
+- name: "Set fact"
+  ansible.builtin.set_fact:
+    secrets: '{{ lookup("community.general.bitwarden_secrets_manager", bws.bws_paperless_id, bws_access_token=bws.bws_token).value | from_json }}'
+  when: use_bws
+
+- name: "Overwrite vars"
+  ansible.builtin.set_fact:
+    postgres_password: "{{ secrets.postgres_password }}"
+    paperless_secret: "{{ secrets.paperless_secret }}"
+  when: use_bws
+
+- name: "create dir"
+  file:
+    path: "{{ base_dir }}/paperless-ngx"
+    state: "directory"
+
+- name: "Create pg_data dir"
+  file:
+    path: "{{ base_dir}}/paperless-ngx/pg_data"
+    state: "directory"
+
+- name: "Create data dir"
+  file:
+    path: "{{ base_dir}}/paperless-ngx/data"
+    state: "directory"
+
+- name: "Create media dir"
+  file:
+    path: "{{ base_dir}}/paperless-ngx/media"
+    state: "directory"
+
+- name: "Create export dir"
+  file:
+    path: "{{ base_dir}}/paperless-ngx/export"
+    state: "directory"
+
+- name: "Create consume dir"
+  file:
+    path: "{{ base_dir}}/paperless-ngx/consume"
+    state: "directory"
+
+- name: "Copy paperless-ngx env"
+  template:
+    force: yes
+    src: "paperless-ngx.env.j2"
+    dest: "{{ base_dir }}/paperless-ngx/paperless-ngx.env"
+
+- name: "pod"
+  containers.podman.podman_pod:
+    name: "paperless-pod"
+    state: "created"
+    infra_name: "paperless-infra"
+    recreate: no
+    ports:
+      - "7500:8000"
+  tags:
+    - "pod"
+
+- name: "postgres"
+  containers.podman.podman_container:
+    pod: "paperless-pod"
+    name: "paperless-db"
+    image: "docker.io/library/postgres:15.3-alpine3.18"
+    state: "started"
+    recreate: yes
+    volume:
+      - "{{ base_dir }}/paperless-ngx/pg_data:/var/lib/postgresql/data:rw,Z"
+    restart_policy: "on-failure"
+    env:
+      POSTGRES_PASSWORD: "{{ postgres_password }}"
+      POSTGRESS_USER: "postgres"
+      POSTGRES_DB: "postgres"
+
+- name: "redis"
+  containers.podman.podman_container:
+    pod: "paperless-pod"
+    name: "paperless-redis"
+    image: "docker.io/library/redis:6.2.12-alpine3.18"
+    recreate: no
+    restart_policy: "no"
+    tty: no
+    detach: yes
+    state: "started"
+
+- name: "tika"
+  containers.podman.podman_container:
+    pod: "paperless-pod"
+    name: "paperless-tika"
+    image: "ghcr.io/paperless-ngx/tika:latest"
+    recreate: no
+    restart_policy: "no"
+    tty: no
+    detach: yes
+    state: "started"
+
+- name: "gotenberg"
+  containers.podman.podman_container:
+    pod: "paperless-pod"
+    name: "paperless-gotenberg"
+    image: "docker.io/gotenberg/gotenberg:7.8"
+    recreate: no
+    restart_policy: "no"
+    tty: no
+    detach: yes
+    state: "started"
+    command:
+    - "gotenberg"
+    - "--chromium-disable-javascript=true"
+    - "--chromium-allow-list=file:///tmp/.*"
+
+- name: "webserver"
+  containers.podman.podman_container:
+    pod: "paperless-pod"
+    name: "paperless-app"
+    image: "ghcr.io/paperless-ngx/paperless-ngx:1.14.5"
+    state: "started"
+    recreate: yes
+    volume:
+      - "{{ base_dir }}/paperless-ngx/data:/usr/src/paperless/data:rw,Z"
+      - "{{ base_dir }}/paperless-ngx/media:/usr/src/paperless/media:rw,Z"
+      - "{{ base_dir }}/paperless-ngx/export:/usr/src/paperless/export:rw,Z"
+      - "{{ base_dir }}/paperless-ngx/consume:/usr/src/paperless/consume:rw,Z"
+    restart_policy: "no"
+    env_file: "{{ base_dir }}/paperless-ngx/paperless-ngx.env"
+    env:
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: "http://127.0.0.1:3000"
+      PAPERLESS_TIKA_ENDPOINT: "http://127.0.0.1:9998"
+      PAPERLESS_DBHOST: "127.0.0.1"

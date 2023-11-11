@@ -1,0 +1,9 @@
+---
+# defaults file for ansible-role-paperless-ngx-podman
+
+paperless_secret: "CHANGEME"
+postgres_password: "CHANGEMETOO"
+base_dir: "./"
+paperless_tz: "America/Los_Angeles"
+paperless_default_ocr_language: "en"
+paperless_url: "http://localhost"
